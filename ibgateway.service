@@ -1,0 +1,17 @@
+[Unit]
+Description=IB Gateway (headless via IBC)
+After=network.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=mwatson
+WorkingDirectory=/home/mwatson/ibc
+ExecStart=/home/mwatson/ibc/start.sh
+Restart=always
+RestartSec=30
+StandardOutput=append:/home/mwatson/ibc/logs/gateway.log
+StandardError=append:/home/mwatson/ibc/logs/gateway-err.log
+
+[Install]
+WantedBy=multi-user.target

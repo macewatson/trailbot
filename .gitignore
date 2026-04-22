@@ -1,0 +1,34 @@
+# Credentials and secrets — NEVER commit these
+.env
+*.env
+config/settings.json
+/ibc/config.ini
+
+# Live trade state (contains position data)
+data/trades.json
+
+# Logs (may contain account/price data)
+logs/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+venv/
+env/
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
