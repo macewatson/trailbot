@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+## [1.0.1] - 2026-04-23
+### Fixed
+- `cpgateway.service`: exit 209/STDOUT — log directory `/home/mwatson/logs/` did not exist; moved log paths to project `logs/` directory and added `ExecStartPre=/bin/mkdir -p` guard
+
 ## [1.0.0] - 2026-04-23
 ### Changed (Breaking — full architecture migration)
 - **Transport**: IB Gateway (TWS protocol, ib_insync) → IBKR Client Portal Gateway (REST API, `requests`)
