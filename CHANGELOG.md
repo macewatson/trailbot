@@ -2,52 +2,58 @@
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-04-22
 ### Added
-- Phase 10: `trailbot.service` systemd unit — starts after ibgateway.service, Restart=always, RestartSec=15, ExecStartPre creates logs/ dir
-- `~/ibc/config.ini.template`: full 2FA configuration — SecondFactorDevice, ReloginAfterSecondFactorAuthenticationTimeout, AutoRestartTime (04:00 ET), ClosedownAt (Friday 21:00), ExistingSessionDetectedAction=primaryoverride, AcceptNonBrokerageAccountWarning=yes
-- `docs/ibc-2fa-setup.md`: manual IBKR account steps for headless 2FA (IBKR Mobile registration, Gateway auto-restart UI config, troubleshooting)
 - `addtrade`: `--trail-pct` and `--tight-trail-pct` options — calculates dollar amount from entry price at add time; stores both `trail_amount` and `trail_pct` (null if dollar mode) in trades.json
-- `updatetrade`: same `--trail-pct` / `--tight-trail-pct` options using existing trade's entry_price; switching to dollar mode clears stored pct and vice versa
-- `botstatus`: expanded from count-only to per-trade table showing TRAIL and TIGHT TRAIL with `(X%)` annotation when pct mode was used
+- `updatetrade`: same `--trail-pct` / `--tight-trail-pct` options using existing trade's `entry_price`; switching to dollar mode clears stored pct and vice versa
+- `botstatus`: expanded from count-only summary to per-trade table showing TRAIL and TIGHT TRAIL with `(X%)` annotation when pct mode was used
 
+## [0.4.0] - 2026-04-22
 ### Added
-- Phase 2: Python 3.12 venv + dependencies (ib_insync 0.9.86, pandas, numpy, watchdog, click, python-dotenv)
-- `requirements.txt` generated from venv
-- Phase 3: `config/settings.json` with IBKR connection, bot poll, trail defaults, notify settings
-- Phase 4: `data/trades.json` schema with `account` field; atomic write via `os.replace()`
-- Phase 5: `cli/trailbot.py` — all CLI commands: addtrade, listtrades, updatetrade, pausetrade, resumetrade, removetrade, tradelog, botstatus, checkconn
-- `pyproject.toml` entry point — `pip install -e .` installs `trailbot` command
-- `--account individual|roth` required on addtrade; resolves to account ID from `.env` at order time
-- Ticker validation via `reqContractDetails` before adding to watchlist
+- `~/ibc/config.ini.template`: full 2FA configuration — `SecondFactorDevice`, `ReloginAfterSecondFactorAuthenticationTimeout`, `AutoRestartTime` (04:00 ET), `ClosedownAt` (Friday 21:00), `ExistingSessionDetectedAction=primaryoverride`, `AcceptNonBrokerageAccountWarning=yes`
+- `docs/ibc-2fa-setup.md`: manual IBKR account steps for headless 2FA (IBKR Mobile registration, Gateway auto-restart UI config, troubleshooting)
+
+## [0.3.0] - 2026-04-22
+### Added
 - Phase 6: `bot/main.py` — daemon with poll loop, watchdog hot-reload, reconnect backoff (5→10→30→60s)
-- Phase 7: `bot/trailing.py` — pure stop engine: HARD/TRAILING/TIGHT state machine, VWAP adjustment, max() enforced everywhere
-- Phase 8: `bot/vwap.py` — VWAPCalculator using reqHistoricalData (5-min bars, RTH); 60s cache per ticker; handles pre-market (uses prior session), after-hours; integrated into main loop for vwap_aware trades
-- Phase 9: `bot/ibkr.py` — place_exit_order: LMT at bid-$0.05, routes to correct account (paper/live transparent via managed accounts fallback), 30s fill wait, logs order_placed + FILLED/fill_timeout
+- Phase 7: `bot/trailing.py` — pure stop engine: HARD/TRAILING/TIGHT state machine, VWAP adjustment, `max()` enforced everywhere
+- Phase 8: `bot/vwap.py` — VWAPCalculator using `reqHistoricalData` (5-min bars, RTH); 60s cache per ticker; handles pre-market (uses prior session) and after-hours; integrated into main loop for `vwap_aware` trades
+- Phase 9: `bot/ibkr.py` — `place_exit_order`: LMT at bid−$0.05, routes to correct account via `get_account_id()`, 30s fill wait, logs `order_placed` + `FILLED`/`fill_timeout`
+- Phase 10: `trailbot.service` systemd unit — starts after `ibgateway.service`, `Restart=always`, `RestartSec=15`
 
 ### Tested
-- Full E2E paper trade: SPY added via CLI, hot-reload detected, hard stop triggered (stop=750.00 price=708.49), order placed on DUK910907 (lmt=708.44), trade marked EXITED. Order cancelled by IBKR because market was closed — correct DAY order behavior; during market hours would fill.
+- Full E2E paper trade: SPY added via CLI, hot-reload detected, hard stop triggered (stop=750.00 price=708.49), order placed on DUK910907 (lmt=708.44), trade marked EXITED. Order cancelled by IBKR because market was closed — correct DAY order behavior.
 
 ### Changed
-- CLAUDE.md: added two-account support (Individual U20004766, Roth IRA U20280589)
-- `--account` flag added to `addtrade` (required, values: `individual` | `roth`)
-- `account` field added to trades.json schema
-- `.env` split `IBKR_ACCOUNT` into `IBKR_ACCOUNT_INDIVIDUAL` and `IBKR_ACCOUNT_ROTH`
-- Phase 9 spec updated: account ID resolved via `get_account_id()` from trade record
 - Phase 10 systemd unit corrected to use `User=mwatson` and `/home/mwatson/` paths
+
+## [0.2.0] - 2026-04-22
+### Added
+- Phase 2: Python 3.12 venv + dependencies (ib_insync 0.9.86, pandas, numpy, watchdog, click, python-dotenv); `requirements.txt` generated from venv
+- Phase 3: `config/settings.json` with IBKR connection, bot poll, trail defaults, notify settings
+- Phase 4: `data/trades.json` schema with `account` field; atomic write via `os.replace()`
+- Phase 5: `cli/trailbot.py` — all CLI commands: `addtrade`, `listtrades`, `updatetrade`, `pausetrade`, `resumetrade`, `removetrade`, `tradelog`, `botstatus`, `checkconn`
+- `pyproject.toml` entry point — `pip install -e .` installs `trailbot` command
+- `--account individual|roth` required on `addtrade`; resolves to account ID from `.env` at order time
+- Ticker validation via `reqContractDetails` before adding to watchlist
+
+### Changed
+- Two-account support: Individual `U20004766`, Roth IRA `U20280589`
+- `.env` split `IBKR_ACCOUNT` into `IBKR_ACCOUNT_INDIVIDUAL` and `IBKR_ACCOUNT_ROTH`
 
 ## [0.1.0] - 2026-04-22
 ### Added
 - Phase 1: IB Gateway 10.37 + IBC 3.23.0 installation on mwuls-4
 - `.gitignore` protecting credentials, logs, trade state, and settings
 - `.env.example` credential template
-- `ibgateway.service` systemd unit (User=mwatson, calls ~/ibc/start.sh)
+- `ibgateway.service` systemd unit (User=mwatson, calls `~/ibc/start.sh`)
 - `~/ibc/config.ini.template` with `${IBKR_USERNAME}` / `${IBKR_PASSWORD}` placeholders
-- `~/ibc/start.sh` wrapper: sources `.env`, runs envsubst to generate config.ini, restores IBC-renamed symlinks, launches Xvfb + gatewaystart.sh -inline
-- IBC `gatewaystart.sh` configured: TWS_MAJOR_VRSN=1037, IBC_PATH=~/ibc, TWS_PATH=~/ibgateway, JAVA_PATH=Zulu JRE bundled by installer
+- `~/ibc/start.sh` wrapper: sources `.env`, runs `envsubst` to generate `config.ini`, restores IBC-renamed symlinks, launches Xvfb + `gatewaystart.sh -inline`
+- IBC `gatewaystart.sh` configured: `TWS_MAJOR_VRSN=1037`, `IBC_PATH=~/ibc`, `TWS_PATH=~/ibgateway`, `JAVA_PATH` set to Zulu JRE bundled by installer
 
 ### Fixed
 - Created `~/ibgateway/1037/` symlink directory (IBC expects versioned path; installer puts files flat)
 - Added `.install4j/` symlink so `i4jruntime.jar` is on classpath
 - Added `tws.vmoptions` symlink (IBC fallback after jars-dir swap)
-- Set JAVA_PATH to Zulu JRE bundled by installer (includes JavaFX; system JDK does not)
+- Set `JAVA_PATH` to Zulu JRE bundled by installer (includes JavaFX; system JDK does not)
 - Installed missing system libs: `openjdk-17-jre-headless`, `xvfb`, `libxtst6`, `libxi6`
