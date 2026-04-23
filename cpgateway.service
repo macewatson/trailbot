@@ -7,12 +7,12 @@ Wants=network-online.target
 Type=simple
 User=mwatson
 WorkingDirectory=/home/mwatson/clientportal.gw
+ExecStartPre=/bin/mkdir -p /home/mwatson/python_projects/trailbot/logs
 ExecStart=/home/mwatson/clientportal.gw/bin/run.sh /home/mwatson/clientportal.gw/root/conf.yaml
 Restart=on-failure
 RestartSec=15
-StandardOutput=append:/home/mwatson/logs/cpgateway.log
-StandardError=append:/home/mwatson/logs/cpgateway-err.log
-Environment=PYTHONUNBUFFERED=1
+StandardOutput=append:/home/mwatson/python_projects/trailbot/logs/cpgateway.log
+StandardError=append:/home/mwatson/python_projects/trailbot/logs/cpgateway-err.log
 
 [Install]
 WantedBy=multi-user.target
