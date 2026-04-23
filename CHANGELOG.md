@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Changed
+- `~/ibc/config.ini.template`: `AutoRestartTime` changed from 04:00 to 02:50 ET to restart after the IBKR maintenance window (typically ends ~02:45 ET); removed `ClosedownAt` — bot runs 24/7 with no planned Friday shutdown
+
 ## [0.5.0] - 2026-04-22
 ### Added
 - `addtrade`: `--trail-pct` and `--tight-trail-pct` options — calculates dollar amount from entry price at add time; stores both `trail_amount` and `trail_pct` (null if dollar mode) in trades.json
