@@ -26,6 +26,15 @@ and multi-stage profit targets. Designed to run 10+ positions per day unattended
 | systemd service | `trailbot.service` |
 | Claude Code | Installed on mwuls-4 |
 
+## IBKR Accounts
+
+| Account | ID | Type |
+|---|---|---|
+| Individual | `U20004766` | Taxable |
+| Roth IRA | `U20280589` | Retirement |
+
+Each trade is tagged with an `account` field. The `--account` flag on `addtrade` accepts `individual` or `roth` (case-insensitive). There is no default — the account must always be specified explicitly.
+
 ---
 
 ## Project File Structure
@@ -106,7 +115,8 @@ Thumbs.db
 
 IBKR_USERNAME=your_username_here
 IBKR_PASSWORD=your_password_here
-IBKR_ACCOUNT=your_account_id_here
+IBKR_ACCOUNT_INDIVIDUAL=U20004766
+IBKR_ACCOUNT_ROTH=U20280589
 IBKR_PORT=4002
 NOTIFY_EMAIL=your@email.com
 ```
@@ -265,7 +275,8 @@ pip freeze > requirements.txt
 ```env
 IBKR_USERNAME=your_username
 IBKR_PASSWORD=your_password
-IBKR_ACCOUNT=your_account_id
+IBKR_ACCOUNT_INDIVIDUAL=U20004766
+IBKR_ACCOUNT_ROTH=U20280589
 IBKR_PORT=4002
 NOTIFY_EMAIL=your@email.com
 ```
@@ -310,6 +321,7 @@ Shared state file. CLI writes; bot hot-reloads via `watchdog`. Not committed to 
 {
   "AAPL": {
     "ticker": "AAPL",
+    "account": "individual",
     "exchange": "SMART",
     "currency": "USD",
     "asset_type": "STK",
@@ -342,12 +354,13 @@ Stop mode values: `HARD` `TRAILING` `TIGHT`
 Built with `click`. Install via `pip install -e .` or symlink to PATH.
 
 ```bash
-addtrade AAPL 213.50 --qty 100 --stop 210.00 --trigger 217.00 \
+addtrade AAPL 213.50 --account individual --qty 100 --stop 210.00 --trigger 217.00 \
          --trail 1.50 --tighten 220.00 --tight-trail 0.75 --vwap
 
-addtrade AAPL 213.50 --qty 100 --stop 210.00   # minimal, hard stop only
+addtrade AAPL 213.50 --account roth --qty 100 --stop 210.00   # minimal, hard stop only
 
 listtrades
+listtrades --account individual    # filter by account
 botstatus
 updatetrade AAPL --trail 2.00 --tighten 222.00
 pausetrade AAPL
@@ -357,6 +370,9 @@ checkconn
 ```
 
 Rules:
+- `--account` is required on `addtrade`. Accepted values: `individual`, `roth` (case-insensitive)
+- `individual` maps to account ID `U20004766`; `roth` maps to `U20280589`
+- Account ID is resolved from `.env` at order placement time — never hardcoded
 - Atomic writes: write to `.tmp` then `os.replace()`
 - Validate ticker via `reqContractDetails` before adding
 - Confirm before `removetrade`: `"Remove AAPL from watchlist? [y/N]"`
@@ -449,10 +465,12 @@ class VWAPCalculator:
 ```python
 def place_exit_order(ib, trade: dict) -> None:
     # LMT at bid - $0.05. Bot triggers — no native IBKR stops.
+    # Account resolved from trade["account"] via get_account_id()
 ```
 
 - `LimitOrder` only — works in all sessions including extended hours
-- Log: timestamp, price, reason, order ID
+- Account ID resolved via `get_account_id(account_label)`: `individual` → `IBKR_ACCOUNT_INDIVIDUAL`, `roth` → `IBKR_ACCOUNT_ROTH`
+- Log: timestamp, account, price, reason, order ID
 - Update `trades.json` to `EXITED` on fill
 - Handle partial fills
 
@@ -475,13 +493,13 @@ Requires=ibgateway.service
 
 [Service]
 Type=simple
-User=root
-WorkingDirectory=/root/python_projects/trailbot
-ExecStart=/root/python_projects/trailbot/venv/bin/python bot/main.py
+User=mwatson
+WorkingDirectory=/home/mwatson/python_projects/trailbot
+ExecStart=/home/mwatson/python_projects/trailbot/venv/bin/python bot/main.py
 Restart=always
 RestartSec=10
-StandardOutput=append:/root/python_projects/trailbot/logs/trailbot.log
-StandardError=append:/root/python_projects/trailbot/logs/trailbot-err.log
+StandardOutput=append:/home/mwatson/python_projects/trailbot/logs/trailbot.log
+StandardError=append:/home/mwatson/python_projects/trailbot/logs/trailbot-err.log
 Environment=PYTHONUNBUFFERED=1
 
 [Install]
@@ -499,7 +517,7 @@ systemctl daemon-reload && systemctl enable trailbot && systemctl start trailbot
 **Always test on paper account first. `IBKR_PORT=4002` in `.env`.**
 
 1. `checkconn` — confirm connection
-2. `addtrade SPY 500.00 --qty 1 --stop 498.00 --trigger 502.00 --trail 1.00`
+2. `addtrade SPY 500.00 --account individual --qty 1 --stop 498.00 --trigger 502.00 --trail 1.00`
 3. `botstatus` — confirm watching
 4. Force a stop hit via `updatetrade` — lower stop to current price
 5. Confirm exit order placed and logged

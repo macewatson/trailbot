@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Changed
+- CLAUDE.md: added two-account support (Individual U20004766, Roth IRA U20280589)
+- `--account` flag added to `addtrade` (required, values: `individual` | `roth`)
+- `account` field added to trades.json schema
+- `.env` split `IBKR_ACCOUNT` into `IBKR_ACCOUNT_INDIVIDUAL` and `IBKR_ACCOUNT_ROTH`
+- Phase 9 spec updated: account ID resolved via `get_account_id()` from trade record
+- Phase 10 systemd unit corrected to use `User=mwatson` and `/home/mwatson/` paths
+
 ## [0.1.0] - 2026-04-22
 ### Added
 - Phase 1: IB Gateway 10.37 + IBC 3.23.0 installation on mwuls-4
