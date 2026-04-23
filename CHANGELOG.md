@@ -11,6 +11,9 @@
 - `pyproject.toml` entry point — `pip install -e .` installs `trailbot` command
 - `--account individual|roth` required on addtrade; resolves to account ID from `.env` at order time
 - Ticker validation via `reqContractDetails` before adding to watchlist
+- Phase 6: `bot/main.py` — daemon with poll loop, watchdog hot-reload, reconnect backoff (5→10→30→60s)
+- Phase 7: `bot/trailing.py` — pure stop engine: HARD/TRAILING/TIGHT state machine, VWAP adjustment, max() enforced everywhere
+- `bot/ibkr.py` stub — placeholder for Phase 9 order execution
 
 ### Changed
 - CLAUDE.md: added two-account support (Individual U20004766, Roth IRA U20280589)
