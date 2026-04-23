@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+## [1.0.2] - 2026-04-23
+### Fixed
+- `cpgateway.service`: `run.sh` prepends `../` to its argument, so passing an absolute path produced "Failed to load configuration file"; changed to relative `root/conf.yaml` (resolves correctly because `WorkingDirectory` is set to the gateway root)
+
 ## [1.0.1] - 2026-04-23
 ### Fixed
 - `cpgateway.service`: exit 209/STDOUT — log directory `/home/mwatson/logs/` did not exist; moved log paths to project `logs/` directory and added `ExecStartPre=/bin/mkdir -p` guard
