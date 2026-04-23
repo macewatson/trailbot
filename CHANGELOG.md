@@ -6,6 +6,9 @@
 - Phase 10: `trailbot.service` systemd unit — starts after ibgateway.service, Restart=always, RestartSec=15, ExecStartPre creates logs/ dir
 - `~/ibc/config.ini.template`: full 2FA configuration — SecondFactorDevice, ReloginAfterSecondFactorAuthenticationTimeout, AutoRestartTime (04:00 ET), ClosedownAt (Friday 21:00), ExistingSessionDetectedAction=primaryoverride, AcceptNonBrokerageAccountWarning=yes
 - `docs/ibc-2fa-setup.md`: manual IBKR account steps for headless 2FA (IBKR Mobile registration, Gateway auto-restart UI config, troubleshooting)
+- `addtrade`: `--trail-pct` and `--tight-trail-pct` options — calculates dollar amount from entry price at add time; stores both `trail_amount` and `trail_pct` (null if dollar mode) in trades.json
+- `updatetrade`: same `--trail-pct` / `--tight-trail-pct` options using existing trade's entry_price; switching to dollar mode clears stored pct and vice versa
+- `botstatus`: expanded from count-only to per-trade table showing TRAIL and TIGHT TRAIL with `(X%)` annotation when pct mode was used
 
 ### Added
 - Phase 2: Python 3.12 venv + dependencies (ib_insync 0.9.86, pandas, numpy, watchdog, click, python-dotenv)

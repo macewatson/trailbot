@@ -78,18 +78,28 @@ def cli():
               help="Price to activate trailing stop")
 @click.option("--trail", "trail_amount", default=None, type=float,
               help="Trail distance in dollars")
+@click.option("--trail-pct", "trail_pct", default=None, type=float,
+              help="Trail distance as %% of entry price (e.g. 0.75 = 0.75%%)")
 @click.option("--tighten", "tighten_at", default=None, type=float,
               help="Price to switch to tight trail")
 @click.option("--tight-trail", "tight_trail_amount", default=None, type=float,
               help="Tight trail distance in dollars")
+@click.option("--tight-trail-pct", "tight_trail_pct", default=None, type=float,
+              help="Tight trail distance as %% of entry price")
 @click.option("--vwap", "vwap_aware", is_flag=True, default=False,
               help="Enable VWAP-aware trail adjustment")
 def addtrade(ticker, entry_price, account, qty, hard_stop,
-             trail_trigger, trail_amount, tighten_at, tight_trail_amount, vwap_aware):
+             trail_trigger, trail_amount, trail_pct, tighten_at,
+             tight_trail_amount, tight_trail_pct, vwap_aware):
     """Add a trade to the watchlist."""
     ticker = ticker.upper()
     account = account.lower()
     get_account_id(account)  # validate early before connecting
+
+    if trail_amount is not None and trail_pct is not None:
+        raise click.UsageError("--trail and --trail-pct are mutually exclusive.")
+    if tight_trail_amount is not None and tight_trail_pct is not None:
+        raise click.UsageError("--tight-trail and --tight-trail-pct are mutually exclusive.")
 
     try:
         ib = connect_ib()
@@ -112,6 +122,19 @@ def addtrade(ticker, entry_price, account, qty, hard_stop,
         sys.exit(1)
 
     defaults = load_settings().get("defaults", {})
+
+    if trail_pct is not None:
+        trail_amount = round(entry_price * trail_pct / 100, 2)
+    elif trail_amount is None:
+        trail_amount = defaults.get("trail_amount", 1.50)
+        trail_pct = None
+
+    if tight_trail_pct is not None:
+        tight_trail_amount = round(entry_price * tight_trail_pct / 100, 2)
+    elif tight_trail_amount is None:
+        tight_trail_amount = defaults.get("tight_trail_amount", 0.75)
+        tight_trail_pct = None
+
     trade = {
         "ticker": ticker,
         "account": account,
@@ -123,10 +146,11 @@ def addtrade(ticker, entry_price, account, qty, hard_stop,
         "direction": "LONG",
         "hard_stop": hard_stop,
         "trail_trigger": trail_trigger,
-        "trail_amount": trail_amount if trail_amount is not None else defaults.get("trail_amount", 1.50),
+        "trail_amount": trail_amount,
+        "trail_pct": trail_pct,
         "tighten_at": tighten_at,
-        "tight_trail_amount": tight_trail_amount if tight_trail_amount is not None
-                              else defaults.get("tight_trail_amount", 0.75),
+        "tight_trail_amount": tight_trail_amount,
+        "tight_trail_pct": tight_trail_pct,
         "vwap_aware": vwap_aware,
         "status": "WATCHING",
         "current_stop": hard_stop,
@@ -142,7 +166,9 @@ def addtrade(ticker, entry_price, account, qty, hard_stop,
     parts = [f"entry={entry_price}", f"stop={hard_stop}", f"account={account}"]
     if trail_trigger:
         parts.append(f"trigger={trail_trigger}")
-    if trail_amount:
+    if trail_pct is not None:
+        parts.append(f"trail={trail_amount} ({trail_pct}%)")
+    else:
         parts.append(f"trail={trail_amount}")
     click.echo(f"Added {ticker}  {' | '.join(parts)}")
 
@@ -179,11 +205,22 @@ def listtrades(account):
 @click.option("--stop", "hard_stop", default=None, type=float, help="New hard stop price")
 @click.option("--trigger", "trail_trigger", default=None, type=float)
 @click.option("--trail", "trail_amount", default=None, type=float)
+@click.option("--trail-pct", "trail_pct", default=None, type=float,
+              help="Trail distance as %% of entry price")
 @click.option("--tighten", "tighten_at", default=None, type=float)
 @click.option("--tight-trail", "tight_trail_amount", default=None, type=float)
-def updatetrade(ticker, hard_stop, trail_trigger, trail_amount, tighten_at, tight_trail_amount):
+@click.option("--tight-trail-pct", "tight_trail_pct", default=None, type=float,
+              help="Tight trail distance as %% of entry price")
+def updatetrade(ticker, hard_stop, trail_trigger, trail_amount, trail_pct,
+                tighten_at, tight_trail_amount, tight_trail_pct):
     """Update parameters for an existing trade."""
     ticker = ticker.upper()
+
+    if trail_amount is not None and trail_pct is not None:
+        raise click.UsageError("--trail and --trail-pct are mutually exclusive.")
+    if tight_trail_amount is not None and tight_trail_pct is not None:
+        raise click.UsageError("--tight-trail and --tight-trail-pct are mutually exclusive.")
+
     trades = load_trades()
     if ticker not in trades:
         click.echo(f"Error: {ticker} not in watchlist.", err=True)
@@ -208,14 +245,29 @@ def updatetrade(ticker, hard_stop, trail_trigger, trail_amount, tighten_at, tigh
     if trail_trigger is not None:
         trade["trail_trigger"] = trail_trigger
         updated.append(f"trigger={trail_trigger}")
-    if trail_amount is not None:
+
+    if trail_pct is not None:
+        computed = round(trade["entry_price"] * trail_pct / 100, 2)
+        trade["trail_amount"] = computed
+        trade["trail_pct"] = trail_pct
+        updated.append(f"trail={computed} ({trail_pct}%)")
+    elif trail_amount is not None:
         trade["trail_amount"] = trail_amount
+        trade["trail_pct"] = None
         updated.append(f"trail={trail_amount}")
+
     if tighten_at is not None:
         trade["tighten_at"] = tighten_at
         updated.append(f"tighten_at={tighten_at}")
-    if tight_trail_amount is not None:
+
+    if tight_trail_pct is not None:
+        computed = round(trade["entry_price"] * tight_trail_pct / 100, 2)
+        trade["tight_trail_amount"] = computed
+        trade["tight_trail_pct"] = tight_trail_pct
+        updated.append(f"tight_trail={computed} ({tight_trail_pct}%)")
+    elif tight_trail_amount is not None:
         trade["tight_trail_amount"] = tight_trail_amount
+        trade["tight_trail_pct"] = None
         updated.append(f"tight_trail={tight_trail_amount}")
 
     if not updated:
@@ -288,19 +340,39 @@ def tradelog(ticker):
         click.echo(line, nl=False)
 
 
+def _fmt_trail(amount, pct):
+    if pct is not None:
+        return f"${amount:.2f} ({pct}%)"
+    if amount is not None:
+        return f"${amount:.2f}"
+    return "—"
+
+
 @cli.command()
 def botstatus():
-    """Show watchlist summary."""
+    """Show watchlist summary with trail configuration."""
     trades = load_trades()
     if not trades:
         click.echo("Watchlist is empty.")
         return
+
     by_status = {}
     for t in trades.values():
         by_status.setdefault(t["status"], 0)
         by_status[t["status"]] += 1
     summary = " | ".join(f"{s.lower()}={n}" for s, n in sorted(by_status.items()))
-    click.echo(f"{len(trades)} trade(s): {summary}")
+    click.echo(f"{len(trades)} trade(s): {summary}\n")
+
+    header = f"{'TICKER':<8}  {'STATUS':<10}  {'MODE':<8}  {'TRAIL':<18}  {'TIGHT TRAIL':<18}  VWAP"
+    click.echo(header)
+    click.echo("-" * len(header))
+    for t in sorted(trades.values(), key=lambda x: x["ticker"]):
+        trail_str = _fmt_trail(t.get("trail_amount"), t.get("trail_pct"))
+        tight_str = _fmt_trail(t.get("tight_trail_amount"), t.get("tight_trail_pct"))
+        click.echo(
+            f"{t['ticker']:<8}  {t['status']:<10}  {t['stop_mode']:<8}  "
+            f"{trail_str:<18}  {tight_str:<18}  {'yes' if t.get('vwap_aware') else 'no'}"
+        )
 
 
 @cli.command()
