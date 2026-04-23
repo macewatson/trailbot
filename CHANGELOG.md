@@ -2,6 +2,31 @@
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-04-23
+### Changed (Breaking — full architecture migration)
+- **Transport**: IB Gateway (TWS protocol, ib_insync) → IBKR Client Portal Gateway (REST API, `requests`)
+- `bot/ibkr.py`: Full rewrite — `CpApi` class wrapping CPAPI REST endpoints; `place_exit_order(cp, trade)` uses `/iserver/account/{accountId}/orders`; auto-confirms CPAPI order confirmation questions; `resolve_account()` falls back to first managed account if configured ID not in managed list
+- `bot/main.py`: Full rewrite — removes ib_insync IB object and market-data subscriptions; adds keepalive background thread (`POST /tickle` every 60 s); conid resolution on startup/hot-reload; poll-based snapshot pricing via `CpApi.get_price()`; `connect_cpapi()` waits for gateway auth with backoff
+- `bot/vwap.py`: Updated — uses `CpApi.get_historical_bars()` instead of `reqHistoricalData`; VWAP computed as `Σ((H+L+C)/3 × V) / Σ(V)` (CPAPI bars lack per-bar VWAP); filters to 09:30 ET session open by timestamp; signature changed to `get_vwap(ticker)` (no exchange/currency args — uses conid cache)
+- `cli/trailbot.py`: `connect_ib()` → `connect_cp()`; `addtrade` validates ticker via `CpApi.resolve_conid()` and stores `conid` in trades.json; `checkconn` shows CPAPI auth status
+- `config/settings.json`: `ibkr` section replaced by `cpapi` with `host` + `port` (5000) only; `client_id` / `cli_client_id` removed (not applicable to REST API)
+- `.env.example`: Removed `IBKR_USERNAME` / `IBKR_PASSWORD` (CPAPI auth is browser-based); added `IBKR_PAPER_ACCOUNT`
+- `trailbot.service`: `Wants=ibgateway.service` → `Wants=cpgateway.service`
+- `requirements.txt`: Removed `ib-insync`, `eventkit`, `nest-asyncio`; added `requests`, `urllib3`
+
+### Added
+- `cpgateway.service`: systemd unit for IBKR Client Portal Gateway (runs `~/clientportal.gw/bin/run.sh`)
+- `docs/cpapi-migration.md`: Full migration plan — gateway install, auth flow, all CPAPI endpoints used, session management, paper testing guide, rollback procedure
+- `conid` field in trades.json: IBKR numeric contract ID stored at `addtrade` time; bot auto-resolves on startup for existing entries
+
+### Unchanged
+- `bot/trailing.py`: Pure stop-engine logic — untouched
+
+### Removed
+- `ibgateway.service` dependency from trailbot.service (service unit file kept on disk, disabled)
+- IBC / Xvfb auto-login stack (no longer needed — CPAPI uses browser auth)
+
+## [0.5.1] - 2026-04-22
 ### Changed
 - `~/ibc/config.ini.template`: `AutoRestartTime` changed from 04:00 to 02:50 ET to restart after the IBKR maintenance window (typically ends ~02:45 ET); removed `ClosedownAt` — bot runs 24/7 with no planned Friday shutdown
 

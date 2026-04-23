@@ -4,18 +4,16 @@ import os
 import signal
 import sys
 import time
-from math import isnan
 from pathlib import Path
-from threading import Event
+from threading import Event, Thread
 
 from dotenv import load_dotenv
-from ib_insync import IB, Stock
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 
 from bot.trailing import process_stop
 from bot.vwap import VWAPCalculator
-from bot.ibkr import place_exit_order
+from bot.ibkr import CpApi, place_exit_order
 
 ROOT = Path(__file__).parent.parent
 load_dotenv(ROOT / ".env")
@@ -66,8 +64,6 @@ def setup_logging(log_level: str) -> logging.Logger:
     sh = logging.StreamHandler()
     sh.setFormatter(fmt)
     logger.addHandler(sh)
-    for name in ("ib_insync.ib", "ib_insync.client", "ib_insync.wrapper"):
-        logging.getLogger(name).setLevel(logging.CRITICAL)
     return logger
 
 
@@ -80,53 +76,63 @@ def log_event(logger: logging.Logger, ticker: str, mode: str, event: str, **kwar
 
 
 # ---------------------------------------------------------------------------
-# IB Gateway connection
+# CPAPI connection
 # ---------------------------------------------------------------------------
 
-def connect_ib(settings: dict, logger: logging.Logger) -> IB:
-    host = settings["ibkr"]["host"]
-    port = settings["ibkr"]["port"]
-    client_id = settings["ibkr"]["client_id"]
+def connect_cpapi(settings: dict, logger: logging.Logger) -> CpApi:
+    """Wait until the Client Portal Gateway is reachable and authenticated."""
+    host = settings["cpapi"]["host"]
+    port = settings["cpapi"]["port"]
     delays = RECONNECT_DELAYS[:]
     attempt = 0
     while True:
         delay = delays[min(attempt, len(delays) - 1)]
         try:
-            ib = IB()
-            ib.connect(host, port, clientId=client_id)
-            logger.info(f"BOT      | connected     | {host}:{port} clientId={client_id}")
-            return ib
+            cp = CpApi(host, port)
+            if cp.is_authenticated():
+                logger.info(f"BOT      | connected     | cpapi {host}:{port}")
+                return cp
+            logger.warning(
+                f"BOT      | not authenticated | open https://{host}:{port} to log in "
+                f"— retry in {delay}s"
+            )
         except Exception as e:
             logger.error(f"BOT      | connect failed | {e} — retry in {delay}s")
-            time.sleep(delay)
-            attempt += 1
+        time.sleep(delay)
+        attempt += 1
 
 
 # ---------------------------------------------------------------------------
-# Market data helpers
+# conid resolution
 # ---------------------------------------------------------------------------
 
-def make_contract(trade: dict) -> Stock:
-    return Stock(trade["ticker"], trade["exchange"], trade["currency"])
-
-
-def get_bid(ticker_obj) -> float | None:
-    try:
-        bid = ticker_obj.bid
-        if bid is None or (isinstance(bid, float) and isnan(bid)) or bid <= 0:
-            return None
-        return bid
-    except Exception:
-        return None
-
-
-def subscribe(ib: IB, trades: dict) -> dict:
-    subs = {}
+def resolve_conids(cp: CpApi, trades: dict, logger: logging.Logger) -> bool:
+    """Resolve missing conids for active trades. Returns True if any changed."""
+    changed = False
     for ticker, trade in trades.items():
-        if trade["status"] in ACTIVE_STATUSES:
-            t = ib.reqMktData(make_contract(trade), "", False, False)
-            subs[ticker] = t
-    return subs
+        if trade["status"] not in ACTIVE_STATUSES:
+            continue
+        existing = trade.get("conid")
+        if existing:
+            cp._conid_cache[ticker] = existing  # warm the in-process cache
+            continue
+        conid = cp.resolve_conid(ticker)
+        if conid:
+            trade["conid"] = conid
+            changed = True
+            logger.info(f"{ticker:<6} | conid resolved | {conid}")
+        else:
+            logger.warning(f"{ticker:<6} | conid NOT resolved — skipping pricing")
+    return changed
+
+
+# ---------------------------------------------------------------------------
+# Session keepalive (background thread)
+# ---------------------------------------------------------------------------
+
+def keepalive_worker(cp: CpApi, stop_event: Event) -> None:
+    while not stop_event.wait(60):
+        cp.tickle()
 
 
 # ---------------------------------------------------------------------------
@@ -141,15 +147,9 @@ class TradesWatcher(FileSystemEventHandler):
         if Path(path).name == "trades.json":
             self._dirty.set()
 
-    def on_modified(self, event):
-        self._mark(event.src_path)
-
-    def on_created(self, event):
-        self._mark(event.src_path)
-
-    def on_moved(self, event):
-        # os.replace() on Linux uses rename() → watchdog fires FileMovedEvent
-        self._mark(event.dest_path)
+    def on_modified(self, event): self._mark(event.src_path)
+    def on_created(self, event): self._mark(event.src_path)
+    def on_moved(self, event): self._mark(event.dest_path)
 
     def consume(self) -> bool:
         if self._dirty.is_set():
@@ -162,11 +162,17 @@ class TradesWatcher(FileSystemEventHandler):
 # Main poll loop
 # ---------------------------------------------------------------------------
 
-def run_loop(ib: IB, settings: dict, logger: logging.Logger) -> None:
+def run_loop(cp: CpApi, settings: dict, logger: logging.Logger) -> None:
     poll_interval = settings["bot"]["poll_interval_seconds"]
     trades = load_trades()
-    subs = subscribe(ib, trades)
-    vwap_calc = VWAPCalculator(ib)
+    if resolve_conids(cp, trades, logger):
+        save_trades(trades)  # persist newly-resolved conids
+
+    vwap_calc = VWAPCalculator(cp)
+
+    stop_event = Event()
+    keepalive_thread = Thread(target=keepalive_worker, args=(cp, stop_event), daemon=True)
+    keepalive_thread.start()
 
     watcher = TradesWatcher()
     observer = Observer()
@@ -178,19 +184,20 @@ def run_loop(ib: IB, settings: dict, logger: logging.Logger) -> None:
 
     try:
         while True:
-            ib.sleep(poll_interval)
+            time.sleep(poll_interval)
 
             # Hot-reload on CLI changes
             if watcher.consume():
                 new_trades = load_trades()
-                for ticker, trade in new_trades.items():
-                    if ticker not in subs and trade["status"] in ACTIVE_STATUSES:
-                        subs[ticker] = ib.reqMktData(make_contract(trade), "", False, False)
-                        log_event(logger, ticker, trade["stop_mode"], "added_to_watchlist")
-                for ticker in list(subs):
+                if resolve_conids(cp, new_trades, logger):
+                    save_trades(new_trades)
+                for ticker in new_trades:
+                    if ticker not in trades:
+                        log_event(logger, ticker, new_trades[ticker]["stop_mode"], "added_to_watchlist")
+                for ticker in list(trades):
                     if ticker not in new_trades:
-                        ib.cancelMktData(subs.pop(ticker).contract)
                         log_event(logger, ticker, "—", "removed_from_watchlist")
+                        vwap_calc.invalidate(ticker)
                 trades = new_trades
 
             changed = False
@@ -199,47 +206,51 @@ def run_loop(ib: IB, settings: dict, logger: logging.Logger) -> None:
                 if trade["status"] not in ACTIVE_STATUSES:
                     continue
 
-                ticker_obj = subs.get(ticker)
-                if ticker_obj is None:
+                conid = trade.get("conid")
+                if not conid:
                     continue
 
-                price = get_bid(ticker_obj)
+                price = cp.get_price(conid)
                 if price is None:
                     continue
 
                 prev_stop = trade["current_stop"]
-                vwap = vwap_calc.get_vwap(ticker, trade["exchange"], trade["currency"]) \
-                       if trade.get("vwap_aware") else None
+                vwap = (
+                    vwap_calc.get_vwap(ticker)
+                    if trade.get("vwap_aware")
+                    else None
+                )
 
                 updated = process_stop(trade, price, vwap=vwap)
 
-                # Log stop movements
                 if updated["current_stop"] != prev_stop:
-                    log_event(logger, ticker, updated["stop_mode"], "stop_moved",
-                              old=f"{prev_stop:.2f}",
-                              new=f"{updated['current_stop']:.2f}",
-                              hwm=f"{updated['high_water_mark']:.2f}",
-                              price=f"{price:.2f}")
+                    log_event(
+                        logger, ticker, updated["stop_mode"], "stop_moved",
+                        old=f"{prev_stop:.2f}",
+                        new=f"{updated['current_stop']:.2f}",
+                        hwm=f"{updated['high_water_mark']:.2f}",
+                        price=f"{price:.2f}",
+                    )
 
-                # Log mode transitions
                 if updated["stop_mode"] != trade["stop_mode"]:
-                    log_event(logger, ticker, updated["stop_mode"], "mode_change",
-                              from_mode=trade["stop_mode"],
-                              price=f"{price:.2f}")
+                    log_event(
+                        logger, ticker, updated["stop_mode"], "mode_change",
+                        from_mode=trade["stop_mode"],
+                        price=f"{price:.2f}",
+                    )
 
-                # Handle exit
                 if updated.get("exit_triggered"):
-                    log_event(logger, ticker, updated["stop_mode"], "EXIT",
-                              stop=f"{updated['current_stop']:.2f}",
-                              price=f"{price:.2f}")
+                    log_event(
+                        logger, ticker, updated["stop_mode"], "EXIT",
+                        stop=f"{updated['current_stop']:.2f}",
+                        price=f"{price:.2f}",
+                    )
                     try:
-                        place_exit_order(ib, updated)
+                        place_exit_order(cp, updated)
                     except Exception as e:
                         logger.error(f"{ticker:<6} | order failed  | {e}")
                         updated["status"] = "EXITED"
 
-                    if ticker in subs:
-                        ib.cancelMktData(subs.pop(ticker).contract)
                     vwap_calc.invalidate(ticker)
 
                 trades[ticker] = updated
@@ -249,6 +260,7 @@ def run_loop(ib: IB, settings: dict, logger: logging.Logger) -> None:
                 save_trades(trades)
 
     finally:
+        stop_event.set()
         observer.stop()
         observer.join()
 
@@ -275,17 +287,12 @@ def main() -> None:
     signal.signal(signal.SIGINT, handle_signal)
 
     while True:
-        ib = connect_ib(settings, logger)
+        cp = connect_cpapi(settings, logger)
         try:
-            run_loop(ib, settings, logger)
+            run_loop(cp, settings, logger)
         except Exception as e:
             logger.error(f"BOT      | run loop error  | {e}", exc_info=True)
-        finally:
-            try:
-                ib.disconnect()
-            except Exception:
-                pass
-        logger.warning("BOT      | disconnected — reconnecting...")
+        logger.warning("BOT      | session lost — reconnecting...")
 
 
 if __name__ == "__main__":

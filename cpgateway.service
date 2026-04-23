@@ -1,0 +1,18 @@
+[Unit]
+Description=IBKR Client Portal Gateway
+After=network.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=mwatson
+WorkingDirectory=/home/mwatson/clientportal.gw
+ExecStart=/home/mwatson/clientportal.gw/bin/run.sh /home/mwatson/clientportal.gw/root/conf.yaml
+Restart=on-failure
+RestartSec=15
+StandardOutput=append:/home/mwatson/logs/cpgateway.log
+StandardError=append:/home/mwatson/logs/cpgateway-err.log
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target

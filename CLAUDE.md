@@ -3,7 +3,8 @@
 ## Project Overview
 
 TrailBot is a headless Python daemon running on **mwuls-4** (Ubuntu 24.04, `10.0.1.10`)
-that manages smart multi-stage trailing stop exits on IBKR positions via IB Gateway.
+that manages smart multi-stage trailing stop exits on IBKR positions via the
+**IBKR Client Portal REST API** (CPAPI).
 
 The operator (Mace) enters trades manually. TrailBot watches price action and manages
 stop logic automatically — including hard stops, trailing stops, VWAP-aware tightening,
@@ -20,10 +21,11 @@ and multi-stage profit targets. Designed to run 10+ positions per day unattended
 | Project root | `~/python_projects/trailbot/` |
 | GitHub | https://github.com/macewatson/trailbot.git |
 | Python | 3.11+ (system) |
-| IBKR interface | IB Gateway (headless, NOT TWS) |
-| IB Gateway port | 4001 (live) / 4002 (paper) |
-| IBC config | `~/ibc/config.ini` |
-| systemd service | `trailbot.service` |
+| IBKR interface | **Client Portal Gateway** (REST API, NOT ib_insync) |
+| CPAPI port | 5000 (HTTPS, self-signed TLS) |
+| CPAPI gateway dir | `~/clientportal.gw/` |
+| systemd services | `cpgateway.service` (gateway), `trailbot.service` (bot) |
+| IB Gateway | Installed at `~/ibgateway/`, **disabled** — kept for future use |
 | Claude Code | Installed on mwuls-4 |
 
 ## IBKR Accounts
@@ -48,12 +50,12 @@ Each trade is tagged with an `account` field. The `--account` flag on `addtrade`
 ├── .env.example               ← safe template, committed to repo
 ├── requirements.txt
 ├── trailbot.service           ← systemd unit (copy to /etc/systemd/system/)
+├── cpgateway.service          ← systemd unit for Client Portal Gateway
 ├── bot/
 │   ├── main.py                ← daemon entry point, main price loop
-│   ├── trailing.py            ← multi-stage trailing stop engine
-│   ├── vwap.py                ← real-time VWAP calculator
-│   ├── ibkr.py                ← ib_insync connection + order wrapper
-│   └── notify.py              ← logging + email/console alerts
+│   ├── trailing.py            ← multi-stage trailing stop engine (pure logic)
+│   ├── vwap.py                ← VWAP calculator using CPAPI historical bars
+│   └── ibkr.py                ← CpApi class + place_exit_order (REST, no ib_insync)
 ├── cli/
 │   └── trailbot.py            ← all CLI commands (addtrade, listtrades, etc.)
 ├── data/
@@ -113,20 +115,20 @@ Thumbs.db
 # Copy this file to .env and fill in real values
 # NEVER commit .env to git
 
-IBKR_USERNAME=your_username_here
-IBKR_PASSWORD=your_password_here
 IBKR_ACCOUNT_INDIVIDUAL=U20004766
 IBKR_ACCOUNT_ROTH=U20280589
-IBKR_PORT=4002
+IBKR_PAPER_ACCOUNT=DUK910907
 NOTIFY_EMAIL=your@email.com
+
+# Note: No username/password — CPAPI auth is done once per day via browser at https://localhost:5000
 ```
 
 ### Credential rules
 
-- All credentials live in `.env` only — loaded via `python-dotenv`
+- Account IDs live in `.env` — loaded via `python-dotenv`
+- No username/password in `.env` — Client Portal Gateway auth is browser-based (once per session)
 - `config/settings.json` holds non-sensitive bot config only (poll intervals, trail defaults)
 - Never hardcode credentials anywhere in source code
-- Never log, print, or expose `.env` or `config.ini` contents
 
 ### Git workflow
 
@@ -189,70 +191,47 @@ Format:
 
 Execute phases in sequence. Commit to GitHub at the end of each phase.
 
-### Phase 1 — IB Gateway + IBC (Unattended Login)
+### Phase 1 — Client Portal Gateway Setup
 
-**1.1 Download IB Gateway**
+**1.1 Install Java**
+```bash
+sudo apt-get install -y openjdk-17-jre-headless
+java -version
+```
+
+**1.2 Download and extract the Client Portal Gateway**
 ```bash
 cd ~
-mkdir -p ibgateway && cd ibgateway
-wget "https://download2.interactivebrokers.com/installers/ibgateway/stable-standalone/ibgateway-stable-standalone-linux-x64.sh"
-chmod +x ibgateway-stable-standalone-linux-x64.sh
-./ibgateway-stable-standalone-linux-x64.sh -q
+mkdir -p clientportal.gw && cd clientportal.gw
+# Get the current download URL from IBKR:
+# https://www.interactivebrokers.com/en/trading/ib-api.php → Client Portal Web API Gateway
+wget "https://download2.interactivebrokers.com/portal/clientportal.gw.zip"
+unzip clientportal.gw.zip
+chmod +x bin/run.sh
 ```
 
-**1.2 Install IBC**
+**1.3 Test startup**
 ```bash
-cd ~
-mkdir -p ibc && cd ibc
-wget "https://github.com/IbcAlpha/IBC/releases/latest/download/IBCLinux-3.18.0.zip"
-unzip IBCLinux-3.18.0.zip
-chmod +x *.sh
+cd ~/clientportal.gw
+./bin/run.sh root/conf.yaml
+# Then open https://localhost:5000 in a browser (SSH tunnel if headless)
+# and log in with IBKR credentials
 ```
 
-**1.3 Configure IBC**
-
-Create `~/ibc/config.ini` — load credentials from `.env`:
-```ini
-IbLoginId=${IBKR_USERNAME}
-IbPassword=${IBKR_PASSWORD}
-TradingMode=paper
-IbDir=/root/Jts/ibgateway/1019
-ReadonlyLogin=no
-AcceptIncomingConnectionAction=accept
-SendTWSTelemetryUsageStatistics=no
-```
-
-**1.4 Test startup**
-```bash
-cd ~/ibc && ./gatewaystart.sh
-ss -tlnp | grep 4002
-```
-
-**1.5 systemd service for IB Gateway**
-
-`/etc/systemd/system/ibgateway.service`:
-```ini
-[Unit]
-Description=IB Gateway (headless)
-After=network.target
-Wants=network-online.target
-
-[Service]
-Type=simple
-User=root
-WorkingDirectory=/root/ibc
-ExecStart=/root/ibc/gatewaystart.sh
-Restart=always
-RestartSec=30
-StandardOutput=append:/root/ibc/logs/gateway.log
-StandardError=append:/root/ibc/logs/gateway-err.log
-
-[Install]
-WantedBy=multi-user.target
-```
+**1.4 systemd service** — see `cpgateway.service` in project root.
 
 ```bash
-systemctl daemon-reload && systemctl enable ibgateway && systemctl start ibgateway
+sudo cp ~/python_projects/trailbot/cpgateway.service /etc/systemd/system/
+sudo systemctl daemon-reload && sudo systemctl enable cpgateway && sudo systemctl start cpgateway
+```
+
+**1.5 IB Gateway (disabled, kept for future use)**
+
+IB Gateway remains installed at `~/ibgateway/` with `ibgateway.service` disabled:
+```bash
+sudo systemctl stop ibgateway
+sudo systemctl disable ibgateway
+# Unit file is NOT deleted
 ```
 
 ---
@@ -263,7 +242,7 @@ systemctl daemon-reload && systemctl enable ibgateway && systemctl start ibgatew
 cd ~/python_projects/trailbot
 python3 -m venv venv
 source venv/bin/activate
-pip install ib_insync pandas numpy pytz watchdog click python-dotenv
+pip install requests urllib3 pandas numpy pytz watchdog click python-dotenv
 pip freeze > requirements.txt
 ```
 
@@ -273,22 +252,18 @@ pip freeze > requirements.txt
 
 `.env` (never committed):
 ```env
-IBKR_USERNAME=your_username
-IBKR_PASSWORD=your_password
 IBKR_ACCOUNT_INDIVIDUAL=U20004766
 IBKR_ACCOUNT_ROTH=U20280589
-IBKR_PORT=4002
+IBKR_PAPER_ACCOUNT=DUK910907
 NOTIFY_EMAIL=your@email.com
 ```
 
 `config/settings.json` (never committed):
 ```json
 {
-  "ibkr": {
+  "cpapi": {
     "host": "127.0.0.1",
-    "port": 4002,
-    "client_id": 1,
-    "readonly": false
+    "port": 5000
   },
   "bot": {
     "poll_interval_seconds": 5,
@@ -321,6 +296,7 @@ Shared state file. CLI writes; bot hot-reloads via `watchdog`. Not committed to 
 {
   "AAPL": {
     "ticker": "AAPL",
+    "conid": 265598,
     "account": "individual",
     "exchange": "SMART",
     "currency": "USD",
@@ -384,17 +360,18 @@ Rules:
 
 ```
 1. Load .env and settings.json
-2. Connect to IB Gateway via ib_insync
-3. Load trades.json
-4. Start watchdog on trades.json (hot-reload on change)
-5. Every poll_interval_seconds for each active trade:
-   a. Get current bid price from IBKR
+2. Wait for Client Portal Gateway to be authenticated (backoff: 5→10→30→60s)
+3. Load trades.json; resolve missing conids via /iserver/secdef/search
+4. Start keepalive thread (POST /tickle every 60s)
+5. Start watchdog on trades.json (hot-reload on change)
+6. Every poll_interval_seconds for each active trade:
+   a. GET /iserver/marketdata/snapshot → bid price
    b. Update high_water_mark
    c. Run trailing.py stop engine
    d. If exit triggered → place order via ibkr.py
    e. Write updated state to trades.json atomically
    f. Log all events
-6. On disconnect: backoff reconnect (5s → 10s → 30s → 60s), never crash
+7. On session loss: detect via auth_status(), reconnect loop, never crash
 ```
 
 ---
@@ -449,12 +426,13 @@ else:                    effective_trail = trail_amount
 
 ```python
 class VWAPCalculator:
-    def __init__(self, ticker: str, ib): ...
-    def get_vwap(self) -> float: ...
+    def __init__(self, cp: CpApi): ...
+    def get_vwap(self, ticker: str) -> float | None: ...
 ```
 
-- Fetch bars from session open (09:30 ET US equities) via `reqHistoricalData`
-- Live updates via `reqRealTimeBars`
+- Fetch 5-min bars via `GET /iserver/marketdata/history?period=1d&bar=5min&outsideRth=0`
+- VWAP = `Σ((H+L+C)/3 × V) / Σ(V)` for bars since 09:30 ET today
+- Falls back to all returned bars pre-market
 - After hours: use prior session VWAP
 - Cache per ticker
 
@@ -463,66 +441,66 @@ class VWAPCalculator:
 ### Phase 9 — Order Execution (`bot/ibkr.py`)
 
 ```python
-def place_exit_order(ib, trade: dict) -> None:
-    # LMT at bid - $0.05. Bot triggers — no native IBKR stops.
-    # Account resolved from trade["account"] via get_account_id()
+def place_exit_order(cp: CpApi, trade: dict) -> None:
+    # LMT at bid - $0.05 via POST /iserver/account/{accountId}/orders
+    # conid required — stored in trade dict
+    # Account resolved from trade["account"] → .env lookup with managed-account fallback
 ```
 
-- `LimitOrder` only — works in all sessions including extended hours
-- Account ID resolved via `get_account_id(account_label)`: `individual` → `IBKR_ACCOUNT_INDIVIDUAL`, `roth` → `IBKR_ACCOUNT_ROTH`
-- Log: timestamp, account, price, reason, order ID
-- Update `trades.json` to `EXITED` on fill
-- Handle partial fills
-
-Asset routing:
-- `STK` → SMART
-- `OPT` → requires expiry, strike, right — handle separately
-- `CASH` (FX) → IDEALPRO
-- Euro equities → explicit exchange (IBIS, AEB, etc.) — never SMART
+- `LMT DAY` only — works in all sessions including extended hours
+- conid resolved at addtrade time; stored in trades.json
+- CPAPI may return confirmation question → auto-confirmed via `POST /iserver/reply/{id}`
+- Log: timestamp, account, price, order ID
+- Update `trades.json` to `EXITED` on fill or timeout
 
 ---
 
-### Phase 10 — TrailBot systemd Service
+### Phase 10 — systemd Services
 
-`/etc/systemd/system/trailbot.service`:
+**`/etc/systemd/system/cpgateway.service`** (Client Portal Gateway):
 ```ini
 [Unit]
-Description=TrailBot Smart Trailing Stop Daemon
-After=network.target ibgateway.service
-Requires=ibgateway.service
+Description=IBKR Client Portal Gateway
+After=network.target
 
 [Service]
-Type=simple
 User=mwatson
-WorkingDirectory=/home/mwatson/python_projects/trailbot
-ExecStart=/home/mwatson/python_projects/trailbot/venv/bin/python bot/main.py
-Restart=always
-RestartSec=10
-StandardOutput=append:/home/mwatson/python_projects/trailbot/logs/trailbot.log
-StandardError=append:/home/mwatson/python_projects/trailbot/logs/trailbot-err.log
-Environment=PYTHONUNBUFFERED=1
+WorkingDirectory=/home/mwatson/clientportal.gw
+ExecStart=/home/mwatson/clientportal.gw/bin/run.sh /home/mwatson/clientportal.gw/root/conf.yaml
+Restart=on-failure
+RestartSec=15
+```
 
-[Install]
-WantedBy=multi-user.target
+**`/etc/systemd/system/trailbot.service`** (bot daemon):
+```ini
+[Unit]
+After=network.target cpgateway.service
+Wants=cpgateway.service
 ```
 
 ```bash
-systemctl daemon-reload && systemctl enable trailbot && systemctl start trailbot
+# Install both services
+sudo cp cpgateway.service trailbot.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable cpgateway trailbot
+sudo systemctl start cpgateway
+# Authenticate via browser at https://localhost:5000 (once)
+sudo systemctl start trailbot
 ```
 
 ---
 
 ## Testing Protocol
 
-**Always test on paper account first. `IBKR_PORT=4002` in `.env`.**
+**Always test on paper account first. Authenticate gateway to paper account.**
 
-1. `checkconn` — confirm connection
-2. `addtrade SPY 500.00 --account individual --qty 1 --stop 498.00 --trigger 502.00 --trail 1.00`
-3. `botstatus` — confirm watching
-4. Force a stop hit via `updatetrade` — lower stop to current price
-5. Confirm exit order placed and logged
-6. Review `logs/trailbot.log`
-7. Switch to live (`IBKR_PORT=4001`) only after paper tests pass consistently
+1. Start `cpgateway.service`; log in at `https://localhost:5000` selecting Paper
+2. `trailbot checkconn` — confirm `DUK910907` shown
+3. `addtrade SPY 500.00 --account individual --qty 1 --stop 498.00 --trigger 502.00 --trail 1.00`
+4. `botstatus` — confirm WATCHING with conid shown
+5. Force a stop hit via `updatetrade SPY --stop 600.00`
+6. Confirm exit order placed and logged in `logs/trailbot.log`
+7. Switch to live only after paper tests pass consistently
 
 ---
 
@@ -539,15 +517,16 @@ systemctl daemon-reload && systemctl enable trailbot && systemctl start trailbot
 
 ## Rules for Claude Code
 
-- Never place live orders without confirming `IBKR_PORT=4002` unless explicitly told to go live
+- Never place live orders unless the gateway is authenticated to the live account; confirm before switching from paper
 - Never use native IBKR stop orders — monitoring loop only
 - Never let `current_stop` decrease for LONG positions — `max()` is enforced everywhere
 - Always write `trades.json` atomically via `os.replace()`
-- Always handle IB Gateway disconnects with reconnect loop — never crash on disconnect
+- Always call `POST /tickle` via keepalive thread — session expires after 5 min idle
+- Always handle gateway session loss with reconnect loop — never crash on unauthenticated state
 - Always update `CHANGELOG.md` before every `git commit`
 - Always `git add . && git commit && git push` at end of each phase
-- Never log or expose `.env` or `config.ini` contents
-- Euro equities and FX require explicit exchange routing — never assume SMART
+- Never log or expose `.env` contents
+- All `requests` calls to the Client Portal Gateway must use `verify=False` (self-signed TLS cert)
 
 ---
 
