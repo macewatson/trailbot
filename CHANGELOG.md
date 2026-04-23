@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+- Phase 2: Python 3.12 venv + dependencies (ib_insync 0.9.86, pandas, numpy, watchdog, click, python-dotenv)
+- `requirements.txt` generated from venv
+
 ### Changed
 - CLAUDE.md: added two-account support (Individual U20004766, Roth IRA U20280589)
 - `--account` flag added to `addtrade` (required, values: `individual` | `roth`)
