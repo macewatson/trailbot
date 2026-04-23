@@ -4,6 +4,8 @@
 
 ### Added
 - Phase 10: `trailbot.service` systemd unit — starts after ibgateway.service, Restart=always, RestartSec=15, ExecStartPre creates logs/ dir
+- `~/ibc/config.ini.template`: full 2FA configuration — SecondFactorDevice, ReloginAfterSecondFactorAuthenticationTimeout, AutoRestartTime (04:00 ET), ClosedownAt (Friday 21:00), ExistingSessionDetectedAction=primaryoverride, AcceptNonBrokerageAccountWarning=yes
+- `docs/ibc-2fa-setup.md`: manual IBKR account steps for headless 2FA (IBKR Mobile registration, Gateway auto-restart UI config, troubleshooting)
 
 ### Added
 - Phase 2: Python 3.12 venv + dependencies (ib_insync 0.9.86, pandas, numpy, watchdog, click, python-dotenv)
