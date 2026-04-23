@@ -13,7 +13,11 @@
 - Ticker validation via `reqContractDetails` before adding to watchlist
 - Phase 6: `bot/main.py` — daemon with poll loop, watchdog hot-reload, reconnect backoff (5→10→30→60s)
 - Phase 7: `bot/trailing.py` — pure stop engine: HARD/TRAILING/TIGHT state machine, VWAP adjustment, max() enforced everywhere
-- `bot/ibkr.py` stub — placeholder for Phase 9 order execution
+- Phase 8: `bot/vwap.py` — VWAPCalculator using reqHistoricalData (5-min bars, RTH); 60s cache per ticker; handles pre-market (uses prior session), after-hours; integrated into main loop for vwap_aware trades
+- Phase 9: `bot/ibkr.py` — place_exit_order: LMT at bid-$0.05, routes to correct account (paper/live transparent via managed accounts fallback), 30s fill wait, logs order_placed + FILLED/fill_timeout
+
+### Tested
+- Full E2E paper trade: SPY added via CLI, hot-reload detected, hard stop triggered (stop=750.00 price=708.49), order placed on DUK910907 (lmt=708.44), trade marked EXITED. Order cancelled by IBKR because market was closed — correct DAY order behavior; during market hours would fill.
 
 ### Changed
 - CLAUDE.md: added two-account support (Individual U20004766, Roth IRA U20280589)

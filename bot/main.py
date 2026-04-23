@@ -14,6 +14,8 @@ from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 
 from bot.trailing import process_stop
+from bot.vwap import VWAPCalculator
+from bot.ibkr import place_exit_order
 
 ROOT = Path(__file__).parent.parent
 load_dotenv(ROOT / ".env")
@@ -164,6 +166,7 @@ def run_loop(ib: IB, settings: dict, logger: logging.Logger) -> None:
     poll_interval = settings["bot"]["poll_interval_seconds"]
     trades = load_trades()
     subs = subscribe(ib, trades)
+    vwap_calc = VWAPCalculator(ib)
 
     watcher = TradesWatcher()
     observer = Observer()
@@ -205,8 +208,10 @@ def run_loop(ib: IB, settings: dict, logger: logging.Logger) -> None:
                     continue
 
                 prev_stop = trade["current_stop"]
+                vwap = vwap_calc.get_vwap(ticker, trade["exchange"], trade["currency"]) \
+                       if trade.get("vwap_aware") else None
 
-                updated = process_stop(trade, price)
+                updated = process_stop(trade, price, vwap=vwap)
 
                 # Log stop movements
                 if updated["current_stop"] != prev_stop:
@@ -228,19 +233,14 @@ def run_loop(ib: IB, settings: dict, logger: logging.Logger) -> None:
                               stop=f"{updated['current_stop']:.2f}",
                               price=f"{price:.2f}")
                     try:
-                        from bot.ibkr import place_exit_order
                         place_exit_order(ib, updated)
-                        log_event(logger, ticker, updated["stop_mode"], "order_placed")
-                    except NotImplementedError:
-                        updated["status"] = "EXITED"
-                        log_event(logger, ticker, updated["stop_mode"], "EXITED",
-                                  note="order_execution_pending_phase9")
                     except Exception as e:
                         logger.error(f"{ticker:<6} | order failed  | {e}")
                         updated["status"] = "EXITED"
 
                     if ticker in subs:
                         ib.cancelMktData(subs.pop(ticker).contract)
+                    vwap_calc.invalidate(ticker)
 
                 trades[ticker] = updated
                 changed = True
