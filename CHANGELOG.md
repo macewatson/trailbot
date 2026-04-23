@@ -5,6 +5,12 @@
 ### Added
 - Phase 2: Python 3.12 venv + dependencies (ib_insync 0.9.86, pandas, numpy, watchdog, click, python-dotenv)
 - `requirements.txt` generated from venv
+- Phase 3: `config/settings.json` with IBKR connection, bot poll, trail defaults, notify settings
+- Phase 4: `data/trades.json` schema with `account` field; atomic write via `os.replace()`
+- Phase 5: `cli/trailbot.py` — all CLI commands: addtrade, listtrades, updatetrade, pausetrade, resumetrade, removetrade, tradelog, botstatus, checkconn
+- `pyproject.toml` entry point — `pip install -e .` installs `trailbot` command
+- `--account individual|roth` required on addtrade; resolves to account ID from `.env` at order time
+- Ticker validation via `reqContractDetails` before adding to watchlist
 
 ### Changed
 - CLAUDE.md: added two-account support (Individual U20004766, Roth IRA U20280589)
