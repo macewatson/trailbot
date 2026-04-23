@@ -1,0 +1,19 @@
+[Unit]
+Description=TrailBot Smart Trailing Stop Daemon
+After=network.target ibgateway.service
+Wants=ibgateway.service
+
+[Service]
+Type=simple
+User=mwatson
+WorkingDirectory=/home/mwatson/python_projects/trailbot
+ExecStartPre=/bin/mkdir -p /home/mwatson/python_projects/trailbot/logs
+ExecStart=/home/mwatson/python_projects/trailbot/venv/bin/python bot/main.py
+Restart=always
+RestartSec=15
+StandardOutput=append:/home/mwatson/python_projects/trailbot/logs/trailbot.log
+StandardError=append:/home/mwatson/python_projects/trailbot/logs/trailbot-err.log
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target

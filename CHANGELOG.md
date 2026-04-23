@@ -3,6 +3,9 @@
 ## [Unreleased]
 
 ### Added
+- Phase 10: `trailbot.service` systemd unit — starts after ibgateway.service, Restart=always, RestartSec=15, ExecStartPre creates logs/ dir
+
+### Added
 - Phase 2: Python 3.12 venv + dependencies (ib_insync 0.9.86, pandas, numpy, watchdog, click, python-dotenv)
 - `requirements.txt` generated from venv
 - Phase 3: `config/settings.json` with IBKR connection, bot poll, trail defaults, notify settings
