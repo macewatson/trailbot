@@ -1,7 +1,7 @@
 [Unit]
 Description=TrailBot Smart Trailing Stop Daemon
-After=network.target cpgateway.service
-Wants=cpgateway.service
+After=network.target ibgateway.service
+Wants=ibgateway.service
 
 [Service]
 Type=simple

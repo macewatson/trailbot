@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 import sys
 from datetime import datetime
@@ -50,17 +51,14 @@ def load_settings() -> dict:
         return json.load(f)
 
 
-def connect_cp():
-    """Return an authenticated CpApi instance, or exit with an error."""
-    from bot.ibkr import CpApi
-    cfg = load_settings()["cpapi"]
-    cp = CpApi(cfg["host"], cfg["port"])
-    if not cp.is_authenticated():
-        raise RuntimeError(
-            f"Client Portal Gateway is not authenticated. "
-            f"Open https://{cfg['host']}:{cfg['port']} in your browser to log in."
-        )
-    return cp
+def connect_ib():
+    from ib_insync import IB, util
+    for name in ("ib_insync.ib", "ib_insync.client", "ib_insync.wrapper"):
+        logging.getLogger(name).setLevel(logging.CRITICAL)
+    cfg = load_settings()["ibkr"]
+    ib = IB()
+    ib.connect(cfg["host"], cfg["port"], clientId=cfg["cli_client_id"])
+    return ib
 
 
 @click.group()
@@ -96,32 +94,31 @@ def addtrade(ticker, entry_price, account, qty, hard_stop,
     """Add a trade to the watchlist."""
     ticker = ticker.upper()
     account = account.lower()
-    get_account_id(account)  # validate .env key early
+    get_account_id(account)  # validate early before connecting
 
     if trail_amount is not None and trail_pct is not None:
         raise click.UsageError("--trail and --trail-pct are mutually exclusive.")
     if tight_trail_amount is not None and tight_trail_pct is not None:
         raise click.UsageError("--tight-trail and --tight-trail-pct are mutually exclusive.")
 
-    conid = None
     try:
-        cp = connect_cp()
-        conid = cp.resolve_conid(ticker)
+        ib = connect_ib()
+        from ib_insync import Stock
+        contract = Stock(ticker, "SMART", "USD")
+        details = ib.reqContractDetails(contract)
+        ib.disconnect()
     except Exception as e:
-        click.echo(f"Warning: could not validate ticker — {e}", err=True)
+        click.echo(f"Error: could not validate ticker — {e}", err=True)
+        sys.exit(1)
 
-    if conid is None:
-        click.echo(f"Error: {ticker} not found via Client Portal API (is the gateway running?).",
-                   err=True)
+    if not details:
+        click.echo(f"Error: {ticker} not found on IBKR SMART.", err=True)
         sys.exit(1)
 
     trades = load_trades()
     if ticker in trades and trades[ticker]["status"] != "EXITED":
-        click.echo(
-            f"Error: {ticker} is already in watchlist (status={trades[ticker]['status']}). "
-            "Use updatetrade or removetrade first.",
-            err=True,
-        )
+        click.echo(f"Error: {ticker} is already in watchlist (status={trades[ticker]['status']}). "
+                   "Use updatetrade or removetrade first.", err=True)
         sys.exit(1)
 
     defaults = load_settings().get("defaults", {})
@@ -140,7 +137,6 @@ def addtrade(ticker, entry_price, account, qty, hard_stop,
 
     trade = {
         "ticker": ticker,
-        "conid": conid,
         "account": account,
         "exchange": "SMART",
         "currency": "USD",
@@ -167,7 +163,7 @@ def addtrade(ticker, entry_price, account, qty, hard_stop,
     trades[ticker] = trade
     save_trades(trades)
 
-    parts = [f"entry={entry_price}", f"stop={hard_stop}", f"account={account}", f"conid={conid}"]
+    parts = [f"entry={entry_price}", f"stop={hard_stop}", f"account={account}"]
     if trail_trigger:
         parts.append(f"trigger={trail_trigger}")
     if trail_pct is not None:
@@ -192,10 +188,8 @@ def listtrades(account):
         click.echo("No active trades.")
         return
 
-    header = (
-        f"{'TICKER':<8}  {'ACCOUNT':<12}  {'STATUS':<10}  {'MODE':<9}  "
-        f"{'ENTRY':>7}  {'STOP':>7}  {'HWM':>7}  {'VWAP'}"
-    )
+    header = f"{'TICKER':<8}  {'ACCOUNT':<12}  {'STATUS':<10}  {'MODE':<9}  " \
+             f"{'ENTRY':>7}  {'STOP':>7}  {'HWM':>7}  {'VWAP'}"
     click.echo(header)
     click.echo("-" * len(header))
     for t in sorted(rows, key=lambda x: x["ticker"]):
@@ -239,10 +233,7 @@ def updatetrade(ticker, hard_stop, trail_trigger, trail_amount, trail_pct,
         if trade["direction"] == "LONG":
             effective = max(hard_stop, trade["current_stop"])
             if effective != hard_stop:
-                click.echo(
-                    f"Note: stop raised to {effective} "
-                    f"(cannot decrease below current {trade['current_stop']})"
-                )
+                click.echo(f"Note: stop raised to {effective} (cannot decrease below current {trade['current_stop']})")
             trade["hard_stop"] = effective
             trade["current_stop"] = effective
             updated.append(f"stop={effective}")
@@ -365,7 +356,7 @@ def botstatus():
         click.echo("Watchlist is empty.")
         return
 
-    by_status: dict[str, int] = {}
+    by_status = {}
     for t in trades.values():
         by_status.setdefault(t["status"], 0)
         by_status[t["status"]] += 1
@@ -386,15 +377,13 @@ def botstatus():
 
 @cli.command()
 def checkconn():
-    """Test Client Portal Gateway connection and authentication."""
+    """Test IB Gateway connection."""
     try:
-        cp = connect_cp()
-        accounts = cp.get_accounts()
-        status = cp.auth_status()
-        click.echo(
-            f"Connected  accounts={','.join(accounts)}  "
-            f"authenticated={status.get('authenticated', False)}"
-        )
+        ib = connect_ib()
+        accounts = ib.managedAccounts()
+        server_time = ib.reqCurrentTime()
+        ib.disconnect()
+        click.echo(f"Connected  accounts={','.join(accounts)}  server_time={server_time}")
     except Exception as e:
         click.echo(f"Connection failed: {e}", err=True)
         sys.exit(1)
